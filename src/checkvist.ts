@@ -1,6 +1,7 @@
 import axios, { AxiosResponse } from 'axios';
 
-export interface Checklist {
+
+export interface IChecklist {
     id: number;
     name: string;
     updated_at: string;
@@ -22,7 +23,72 @@ export interface Checklist {
 }
 
 
-export interface Task {
+type TaskCallback = (task: ITask) => any;
+
+
+export class Checklist {
+  session: Session;
+  data: IChecklist;
+  tasks: ITask[];
+  top: ITask[];
+  tasksById: Record<number, ITask>;
+
+  constructor(session: Session, data: IChecklist) {
+    this.session = session;
+    this.data = data;
+    this.tasks = [];
+    this.top = [];
+    this.tasksById = {};
+  }
+
+  get length(): number {
+    return Object.keys(this.tasksById).length;
+  }
+
+  async update(): Promise<Checklist> {
+    const tasks = await this.session.getChecklistTasks(this.data.id);
+    this.tasks = tasks;
+    this.top = tasks.filter((task) => task.parent_id === 0);
+    tasks.forEach((task) => {
+      this.tasksById[task.id] = task;
+    });
+    return this;
+  }
+
+  *select(predicate: TaskCallback, task?: ITask): Generator<ITask> {
+    if (task) {
+      if (predicate(task)) {
+        yield *this.walk(task)
+      } else {
+        for (var childId of task.tasks) {
+          yield* this.select(predicate, this.tasksById[childId]);
+        }
+      }
+    } else {
+      for (var t of this.top) {
+        yield* this.select(predicate, t);
+      }
+    }
+  }
+
+  *_walk(id: number): Generator<ITask> {
+    yield this.tasksById[id];
+    for (var childId of this.tasksById[id].tasks) {
+      yield* this._walk(childId);
+    }
+  }
+
+  walk(task: ITask) {
+    return this._walk(task.id);
+  }
+
+  async addTags(task: ITask, tags: string[]): Promise<ITask> {
+    return await this.session.updateTask(this.data.id, task.id, {tags: tags.join(',')});
+  }
+}
+
+
+export interface ITask {
     id: number;
     parent_id: number;
     checklist_id: number;
@@ -47,12 +113,12 @@ export interface Task {
 }
 
 
-export function permalink(task: Task): string {
+export function permalink(task: ITask): string {
   return `https://checkvist.com/checklists/${task.checklist_id}/tasks/${task.id}`;
 }
 
 
-export interface NewTask {
+export interface NewTaskData {
     content: string;
     parent_id?: number;
     tags?: string;
@@ -73,7 +139,7 @@ export interface UpdateTaskData {
 }
 
 
-export interface Note {
+export interface INote {
     id: number;                  // Unique ID of the note
     comment: string;             // The text content of the note
     task_id: number;             // ID of the task that contains this note
@@ -148,9 +214,9 @@ export class Session {
    * @param skipStats If true, the request will be executed faster, at the price of missing stats about the number of users/tasks in each list.
    * @returns A Promise containing an array of checklists in JSON format.
    */
-  public async getChecklists(params: { archived?: boolean; order?: string; skipStats?: boolean }): Promise<Checklist[]> {
+  public async getChecklists(params: { archived?: boolean; order?: string; skipStats?: boolean }): Promise<IChecklist[]> {
     const url = `${this.apiBaseURL}/checklists.json`;
-    const response: AxiosResponse<Checklist[]> = await axios.get(url, {
+    const response: AxiosResponse<IChecklist[]> = await axios.get(url, {
       headers: {
         'X-Client-Token': this.token,
       },
@@ -171,10 +237,10 @@ export class Session {
    * @param order Allows overriding the sorting. Possible values: 'id:asc', 'id:desc', or 'updated_at:asc'.
    * @returns A Promise containing an array of task objects in JSON format.
    */
-  public async getChecklistTasks(checklistId: number, withNotes: boolean = false, order: string = 'id:asc'): Promise<Task[]> {
+  public async getChecklistTasks(checklistId: number, withNotes: boolean = false, order: string = 'id:asc'): Promise<ITask[]> {
     const url = `${this.apiBaseURL}/checklists/${checklistId}/tasks.json`;
     try {
-      const response: AxiosResponse<Task[]> = await axios.get(url, {
+      const response: AxiosResponse<ITask[]> = await axios.get(url, {
         headers: {
             'X-Client-Token': this.token,
         },
@@ -198,10 +264,10 @@ export class Session {
    * @param newTaskData Object containing the data for the new task.
    * @returns A Promise containing the created task object in JSON format.
    */
-  public async createTask(checklistId: number, newTaskData: NewTask): Promise<Task> {
+  public async createTask(checklistId: number, data: NewTaskData): Promise<ITask> {
     const url = `${this.apiBaseURL}/checklists/${checklistId}/tasks.json`;
     try {
-      const response: AxiosResponse<Task> = await axios.post(url, newTaskData, {
+      const response: AxiosResponse<ITask> = await axios.post(url, data, {
         headers: {
             'X-Client-Token': this.token,
         },
@@ -222,10 +288,10 @@ export class Session {
    * @param data The data object containing the properties to update.
    * @returns A Promise containing the updated task object in JSON format.
    */
-  public async updateTaskInfo(checklistId: number, taskId: number, data: UpdateTaskData): Promise<Task> {
+  public async updateTask(checklistId: number, taskId: number, data: UpdateTaskData): Promise<ITask> {
     try {
       const url = `${this.apiBaseURL}/checklists/${checklistId}/tasks/${taskId}.json`;
-      const response: AxiosResponse<Task> = await axios.put(url, data, {
+      const response: AxiosResponse<ITask> = await axios.put(url, data, {
         headers: {
             'X-Client-Token': this.token,
         },
@@ -245,10 +311,10 @@ export class Session {
    * @param taskId The ID of the task to delete.
    * @returns A Promise containing the deleted task object in JSON format.
    */
-  public async deleteTask(checklistId: number, taskId: number): Promise<Task> {
+  public async deleteTask(checklistId: number, taskId: number): Promise<ITask> {
     try {
       const url = `${this.apiBaseURL}/checklists/${checklistId}/tasks/${taskId}.json`;
-      const response: AxiosResponse<Task> = await axios.delete(url, {
+      const response: AxiosResponse<ITask> = await axios.delete(url, {
         headers: {
             'X-Client-Token': this.token,
         },
@@ -261,6 +327,7 @@ export class Session {
     }
   }
 
+
   /**
    * Change the status of a specific task in a checklist.
    * @param checklistId The ID of the checklist where the task exists.
@@ -268,10 +335,10 @@ export class Session {
    * @param action The status change action: 'close', 'invalidate', or 'reopen'.
    * @returns A Promise containing an array of updated task objects in JSON format.
    */
-  public async changeTaskStatus(checklistId: number, taskId: number, action: 'close' | 'invalidate' | 'reopen'): Promise<Task[]> {
+  public async changeTaskStatus(checklistId: number, taskId: number, action: 'close' | 'invalidate' | 'reopen'): Promise<ITask[]> {
     try {
       const url = `${this.apiBaseURL}/checklists/${checklistId}/tasks/${taskId}/${action}.json`;
-      const response: AxiosResponse<Task[]> = await axios.post(url, null, {
+      const response: AxiosResponse<ITask[]> = await axios.post(url, null, {
         headers: {
             'X-Client-Token': this.token,
         },
@@ -291,10 +358,10 @@ export class Session {
    * @param taskId The ID of the task to get notes for.
    * @returns A Promise containing an array of notes for the task in JSON format.
    */
-  public async getTaskNotes(checklistId: number, taskId: number): Promise<Note[]> {
+  public async getTaskNotes(checklistId: number, taskId: number): Promise<INote[]> {
     try {
       const url = `${this.apiBaseURL}/checklists/${checklistId}/tasks/${taskId}/comments.json`;
-      const response: AxiosResponse<Note[]> = await axios.get(url, {
+      const response: AxiosResponse<INote[]> = await axios.get(url, {
         headers: {
             'X-Client-Token': this.token,
         },
@@ -314,11 +381,11 @@ export class Session {
    * @param comment The text of the note to create.
    * @returns A Promise containing the created note object in JSON format.
    */
-  public async createTaskNote(checklistId: number, taskId: number, comment: string): Promise<Note> {
+  public async createTaskNote(checklistId: number, taskId: number, comment: string): Promise<INote> {
     try {
       const url = `${this.apiBaseURL}/checklists/${checklistId}/tasks/${taskId}/comments.json`;
       const data = { comment };
-      const response: AxiosResponse<Note> = await axios.post(url, data, {
+      const response: AxiosResponse<INote> = await axios.post(url, data, {
         headers: {
             'X-Client-Token': this.token,
         },
@@ -339,11 +406,11 @@ export class Session {
    * @param comment The updated text of the note.
    * @returns A Promise containing the updated note object in JSON format.
    */
-  public async updateTaskNote(checklistId: number, taskId: number, noteId: number, comment: string): Promise<Note> {
+  public async updateTaskNote(checklistId: number, taskId: number, noteId: number, comment: string): Promise<INote> {
     try {
       const url = `${this.apiBaseURL}/checklists/${checklistId}/tasks/${taskId}/comments/${noteId}.json`;
       const data = { comment };
-      const response: AxiosResponse<Note> = await axios.put(url, data, {
+      const response: AxiosResponse<INote> = await axios.put(url, data, {
         headers: {
             'X-Client-Token': this.token,
         },
@@ -363,10 +430,10 @@ export class Session {
    * @param noteId The ID of the note to delete.
    * @returns A Promise containing the deleted note object in JSON format.
    */
-  public async deleteTaskNote(checklistId: number, taskId: number, noteId: number): Promise<Note> {
+  public async deleteTaskNote(checklistId: number, taskId: number, noteId: number): Promise<INote> {
     try {
       const url = `${this.apiBaseURL}/checklists/${checklistId}/tasks/${taskId}/comments/${noteId}.json`;
-      const response: AxiosResponse<Note> = await axios.delete(url, {
+      const response: AxiosResponse<INote> = await axios.delete(url, {
         headers: {
             'X-Client-Token': this.token,
         },
@@ -386,17 +453,17 @@ export class Session {
    * @param taskId The ID of the task to be copied.
    * @returns A Promise containing the new copied task object in JSON format.
    */
-  public async copyTaskWithChildren(checklistId: number, taskId: number, parent: Task | null, tasks: Task[] | null): Promise<number> {
+  public async copyTaskWithChildren(checklistId: number, taskId: number, parent: ITask | null, tasks: ITask[] | null): Promise<number> {
     try {
       if (tasks === null) {
         tasks = await this.getChecklistTasks(checklistId, true, 'id:asc');
       }
 
-      const taskToCopy: Task | undefined = tasks.find((task) => task.id === taskId);
+      const taskToCopy: ITask | undefined = tasks.find((task) => task.id === taskId);
       if (taskToCopy === undefined) throw new Error(`Task ID not found: ${taskId}`);
 
       // Create a new task object with updated due date (if in the past) and without the ID
-      const newTaskData: NewTask = {
+      const newTaskData: NewTaskData = {
         content: taskToCopy.content,
         parent_id: parent ? parent.id : taskToCopy.parent_id,
         tags: taskToCopy.tags_as_text,
@@ -406,7 +473,7 @@ export class Session {
       };
 
       // Create the new task in the same checklist
-      const newTask: Task = await this.createTask(checklistId, newTaskData);
+      const newTask: ITask = await this.createTask(checklistId, newTaskData);
 
       // Recursively copy children tasks and update their parent IDs and positions
       if (taskToCopy.tasks && taskToCopy.tasks.length > 0) {
@@ -445,7 +512,7 @@ export class Session {
    * @param subtasks The list of strings representing the subtasks' content.
    * @returns A Promise containing an array of the created subtask objects in JSON format.
    */
-  public async createTasks(parentTask: Task, subtasks: string[]): Promise<Task[]> {
+  public async createTasks(parentTask: ITask, subtasks: string[]): Promise<ITask[]> {
     try {
       const startPosition: number = parentTask.tasks.length + 1;
 
