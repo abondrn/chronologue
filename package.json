@@ -4,16 +4,20 @@
   "description": "A personal productivity system which is both human and machine readable.",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "download-specs": "curl https://raw.githubusercontent.com/AI-Engineer-Foundation/agent-protocol/main/schemas/openapi.yml -o specs/agent-protocol.yaml",
+    "generate-clients": "openapi -i specs/agent-protocol.yaml -o src/agent_protocol -c axios --indent 2"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "devDependencies": {
+    "openapi-typescript-codegen": "^0.25.0",
     "ts-node": "^10.9.1",
     "typescript": "^5.1.6"
   },
   "dependencies": {
+    "agent-protocol": "^0.1.2",
     "axios": "^1.4.0",
     "date.js": "^0.3.3",
     "inquirer-search-checkbox": "^1.0.0",
