@@ -18,7 +18,7 @@ export interface IChecklist {
     task_count: number;
     task_completed: number;
     item_count: number;
-    tags: Record<string, unknown>;
+    tags: Record<string, boolean>;
     tags_as_text: string;
 }
 
@@ -27,11 +27,11 @@ type TaskCallback = (task: ITask) => any;
 
 
 export class Checklist {
-  session: Session;
-  data: IChecklist;
+  private session: Session;
+  private data: IChecklist;
   tasks: ITask[];
   top: ITask[];
-  tasksById: Record<number, ITask>;
+  private tasksById: Record<number, ITask>;
 
   constructor(session: Session, data: IChecklist) {
     this.session = session;
@@ -60,20 +60,20 @@ export class Checklist {
       if (predicate(task)) {
         yield *this.walk(task)
       } else {
-        for (var childId of task.tasks) {
+        for (const childId of task.tasks) {
           yield* this.select(predicate, this.tasksById[childId]);
         }
       }
     } else {
-      for (var t of this.top) {
+      for (const t of this.top) {
         yield* this.select(predicate, t);
       }
     }
   }
 
-  *_walk(id: number): Generator<ITask> {
+  private *_walk(id: number): Generator<ITask> {
     yield this.tasksById[id];
-    for (var childId of this.tasksById[id].tasks) {
+    for (const childId of this.tasksById[id].tasks) {
       yield* this._walk(childId);
     }
   }
@@ -83,8 +83,17 @@ export class Checklist {
   }
 
   async addTags(task: ITask, tags: string[]): Promise<ITask> {
-    return await this.session.updateTask(this.data.id, task.id, {tags: tags.join(',')});
+    console.assert(this.data.id === task.checklist_id);
+    if (tags.every((tag) => tag in task.tags)) return task;
+    return await this.session.updateTask(this.data.id, task.id, {'task[tags]': tags.map((tag) => tag).join(',')});
   }
+}
+
+
+export enum Status {
+  open = 0,
+  closed = 1,
+  invalided = 2
 }
 
 
@@ -92,7 +101,7 @@ export interface ITask {
     id: number;
     parent_id: number;
     checklist_id: number;
-    status: number;
+    status: Status;
     position: number;
     tasks: number[];
     update_line: string;
@@ -103,37 +112,69 @@ export interface ITask {
     collapsed: boolean;
     comments_count: number;
     assignee_ids: number[];
-    due_user_ids: number[];
+    due_user_ids?: number[];
     details: Record<string, string>;
     backlink_ids: number[];
     link_ids: number[];
     tags: Record<string, unknown>;
     tags_as_text: string;
-    notes: any[]; // Type 'any' can be replaced with a more specific type if available
+    notes?: string[];
 }
 
 
-export function permalink(task: ITask): string {
-  return `https://checkvist.com/checklists/${task.checklist_id}/tasks/${task.id}`;
+export function dueDate(task: ITask): Date | null {
+  if (task.due === null) return null;
+  const parts = task.due.split(/\//).map((part) => parseInt(part, 10));
+  console.assert(parts.length === 3)
+  return new Date(
+    parts[0], parts[1], parts[2]
+  );
 }
+
+
+const
+  ESTIMATE = /^(\d+)([mhd])$/,
+  MULTIPLIER: any = {
+    m: 1,
+    h: 60,
+    d: 8 * 60
+  };
+export function durationEstimateToMinutes(task: ITask) {
+  for (const tag of Object.keys(task.tags)) {
+    const m = tag.match(ESTIMATE);
+    if (m) {
+      const minutes: number = parseInt(m[1], 10) * MULTIPLIER[m[2]]
+      return minutes;
+    }
+  }
+  return null;
+}
+
+
+const BASE_URL = 'https://checkvist.com';
+
+export const
+  permalink = (task: ITask) => `${BASE_URL}/checklists/${task.checklist_id}/tasks/${task.id}`,
+  hasDueDate = (task: ITask) => task.due !== null,
+  hasSubtasks = (task: ITask) => task.tasks.length !== 0; 
 
 
 export interface NewTaskData {
-    content: string;
-    parent_id?: number;
-    tags?: string;
-    due_date?: string | null;
-    position?: number;
-    status?: number;
+    'task[content]': string;
+    'task[parent_id]'?: number;
+    'task[tags]'?: string;
+    'task[due_date]'?: string | null;
+    'task[position]'?: number;
+    'task[status]'?: Status;
 }
 
 
 export interface UpdateTaskData {
-    content?: string;
-    parent_id?: number;
-    tags?: string;
-    due_date?: string;
-    position?: number;
+    'task[content]'?: string;
+    'task[parent_id]'?: number;
+    'task[tags]'?: string;
+    'task[due_date]'?: string;
+    'task[position]'?: number;
     parse?: boolean;
     with_notes?: boolean;
 }
@@ -160,7 +201,7 @@ export class Session {
 
     constructor(private username: string, private remoteKey: string) {
       this.token = null;
-      this.apiBaseURL = 'https://checkvist.com';
+      this.apiBaseURL = BASE_URL;
     }
   
     private async fetchToken(): Promise<void> {
@@ -220,7 +261,7 @@ export class Session {
       headers: {
         'X-Client-Token': this.token,
       },
-      params, // Pass the typed URL parameters directly here
+      params,
     });
 
     if (!response.data) {
@@ -264,12 +305,13 @@ export class Session {
    * @param newTaskData Object containing the data for the new task.
    * @returns A Promise containing the created task object in JSON format.
    */
-  public async createTask(checklistId: number, data: NewTaskData): Promise<ITask> {
+  async _createTask(checklistId: number, data: NewTaskData): Promise<ITask> {
     const url = `${this.apiBaseURL}/checklists/${checklistId}/tasks.json`;
     try {
       const response: AxiosResponse<ITask> = await axios.post(url, data, {
         headers: {
             'X-Client-Token': this.token,
+            'Content-Type': 'application/x-www-form-urlencoded',
         },
       });
 
@@ -278,6 +320,26 @@ export class Session {
       console.error('Error:', error);
       throw new Error('Failed to create task');
     }
+  }
+
+
+  public async createTask(opts: {
+    checklist_id: number,
+    content: string,
+    parent_id?: number,
+    tags?: string,
+    due_date?: string | null,
+    position?: number,
+    status?: Status,
+  }): Promise<ITask> {
+    return await this._createTask(opts.checklist_id, {
+      'task[content]': opts.content,
+      'task[parent_id]': opts.parent_id,
+      'task[tags]': opts.tags,
+      'task[due_date]': opts.due_date,
+      'task[position]': opts.position,
+      'task[status]': opts.status,
+    });
   }
 
 
@@ -294,6 +356,7 @@ export class Session {
       const response: AxiosResponse<ITask> = await axios.put(url, data, {
         headers: {
             'X-Client-Token': this.token,
+            'Content-Type': 'application/x-www-form-urlencoded',
         },
       });
 
@@ -388,6 +451,7 @@ export class Session {
       const response: AxiosResponse<INote> = await axios.post(url, data, {
         headers: {
             'X-Client-Token': this.token,
+            'Content-Type': 'application/x-www-form-urlencoded',
         },
       });
 
@@ -413,6 +477,7 @@ export class Session {
       const response: AxiosResponse<INote> = await axios.put(url, data, {
         headers: {
             'X-Client-Token': this.token,
+            'Content-Type': 'application/x-www-form-urlencoded',
         },
       });
 
@@ -462,18 +527,17 @@ export class Session {
       const taskToCopy: ITask | undefined = tasks.find((task) => task.id === taskId);
       if (taskToCopy === undefined) throw new Error(`Task ID not found: ${taskId}`);
 
-      // Create a new task object with updated due date (if in the past) and without the ID
-      const newTaskData: NewTaskData = {
+      // Create a new task with updated due date (if in the past) and without the ID
+      // in the same checklist
+      const newTask: ITask = await this.createTask({
+        checklist_id: checklistId,
         content: taskToCopy.content,
         parent_id: parent ? parent.id : taskToCopy.parent_id,
         tags: taskToCopy.tags_as_text,
         due_date: this.updateDueDate(taskToCopy.due),
         position: parent ? parent.tasks.length + 1 : taskToCopy.position + 1,
         status: 0, // even if the copied task is not open, the copied task must be
-      };
-
-      // Create the new task in the same checklist
-      const newTask: ITask = await this.createTask(checklistId, newTaskData);
+      });
 
       // Recursively copy children tasks and update their parent IDs and positions
       if (taskToCopy.tasks && taskToCopy.tasks.length > 0) {
@@ -518,7 +582,8 @@ export class Session {
 
       return await Promise.all(
         subtasks.map(async (subtaskContent, index) =>
-          await this.createTask(parentTask.checklist_id, {
+          await this.createTask({
+            checklist_id: parentTask.checklist_id,
             parent_id: parentTask.id,
             content: subtaskContent,
             position: startPosition + index,
