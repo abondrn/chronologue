@@ -1,4 +1,5 @@
 import axios, { AxiosResponse } from 'axios';
+import moment from 'moment';
 
 
 export interface IChecklist {
@@ -26,19 +27,29 @@ export interface IChecklist {
 type TaskCallback = (task: ITask) => any;
 
 
+// TODO: create in-memory version for testing
+// TODO: atomic operations
 export class Checklist {
   private session: Session;
   private data: IChecklist;
   tasks: ITask[];
   top: ITask[];
-  private tasksById: Record<number, ITask>;
+  private tasksById!: Record<number, ITask>;
+  private durationById!: Record<number, number | null>;
+  private dueDateById!: Record<number, Date | null>;
 
   constructor(session: Session, data: IChecklist) {
     this.session = session;
     this.data = data;
     this.tasks = [];
     this.top = [];
+    this.initializeById();
+  }
+
+  private initializeById() {
     this.tasksById = {};
+    this.durationById = {};
+    this.dueDateById = {};
   }
 
   get length(): number {
@@ -49,12 +60,45 @@ export class Checklist {
     const tasks = await this.session.getChecklistTasks(this.data.id);
     this.tasks = tasks;
     this.top = tasks.filter((task) => task.parent_id === 0);
+    this.initializeById();
     tasks.forEach((task) => {
       this.tasksById[task.id] = task;
     });
     return this;
   }
 
+  subtaskDurationEstimateToMinutes(task: ITask) {
+    const subdurations = task.tasks.map((id: number) => this.durationEstimateToMinutes(this.tasksById[id]));
+    return subdurations.every((d) => d === null) ? null : sum(subdurations.map((d) => d || 0));
+  }
+
+  // TODO: sum durations by state
+  durationEstimateToMinutes(task: ITask, includeSubtasks: boolean = true) {
+    if (!(task.id in this.durationById)) {
+      const subduration = this.subtaskDurationEstimateToMinutes(task);
+      const duration = durationEstimateToMinutes(task);
+      this.durationById[task.id] = (
+        subduration === null && duration === null
+        ? null
+        : (duration || 0) + (subduration || 0)
+      );
+    }
+    return this.durationById[task.id];
+  }
+
+  parent(task: ITask): ITask {
+    return this.tasksById[task.parent_id];
+  }
+
+  dueDate(task: ITask) {
+    if (!(task.id in this.dueDateById)) {
+      const parsed = dueDate(task);
+      this.dueDateById[task.id] = parsed !== null ? parsed : task.parent_id === 0 ? null : this.dueDate(this.parent(task));
+    }
+    return this.dueDateById[task.id];
+  }
+
+  // generates all tasks for which the predicate is true or has a parent where the predicate is true; optionally accepts a root task for the operation
   *select(predicate: TaskCallback, task?: ITask): Generator<ITask> {
     if (task) {
       if (predicate(task)) {
@@ -71,6 +115,57 @@ export class Checklist {
     }
   }
 
+  find(predicate: TaskCallback, task?: ITask): ITask | null {
+    const first = this.select(predicate, task).next();
+    return first.done ? null : first.value;
+  }
+
+  contains(predicate: TaskCallback, task?: ITask): boolean {
+    return this.find(predicate, task) !== null;
+  }
+
+  // TODO: be able to specify which tasks to compute stats on
+  stats() {
+    const acc = {
+      overdueMinutes: 0,
+      overdueTaskCount: 0,
+      averageOverdueDays: 0,
+      tasksPerDay: 0,
+      minutesPerDay: 0,
+      unscheduled: 0,
+      unestimated: 0,
+      notes: 0,
+      count: 0,
+    };
+    var dueEstimateCount = 0;
+    this.tasks.forEach((task) => {
+      const due = this.dueDate(task);
+      const now = new Date();
+      const minutes = durationEstimateToMinutes(task);
+      const overdueDays = moment(now).diff(due, 'days');
+      if (due === null) {
+        acc.unscheduled += 1;
+      } else if (due < now) {
+        if (minutes !== null) acc.overdueMinutes += minutes;
+        acc.overdueTaskCount += +hasSubtasks(task);
+        acc.averageOverdueDays += overdueDays;
+      } else {
+        acc.tasksPerDay += +hasSubtasks(task) / (-overdueDays + 1);
+        if (minutes !== null) {
+          acc.minutesPerDay += minutes / (-overdueDays + 1);
+          dueEstimateCount += 1;
+        }
+      }
+      if (minutes === null) acc.unestimated += 1;
+      if (due === null) acc.unscheduled += 1;
+      acc.notes += task.notes?.length || 0;
+    });
+    acc.averageOverdueDays /= acc.overdueTaskCount;
+    acc.minutesPerDay /= dueEstimateCount;
+    acc.count += 1;
+    return acc;
+  }
+
   private *_walk(id: number): Generator<ITask> {
     yield this.tasksById[id];
     for (const childId of this.tasksById[id].tasks) {
@@ -82,6 +177,56 @@ export class Checklist {
     return this._walk(task.id);
   }
 
+  async setDurations(estimator: (task: ITask) => number | null) {
+    this.tasks.forEach(async (task) => {
+      const duration = estimator(task);
+      if (duration !== null) {
+        var unit;
+        if (duration >= 2*MULTIPLIER['d'] || duration == MULTIPLIER['d']) {
+          unit = 'd';
+        } else if (duration >= 2*MULTIPLIER['h'] || duration == MULTIPLIER['h']) {
+          unit = 'h';
+        } else {
+          unit = 'm';
+        }
+        const tag = `${Math.ceil(duration / MULTIPLIER[unit])}${unit}`;
+        await this.addTags(task, [tag]);
+      }
+    });
+    return this.update();
+  }
+
+  async bulkUpdate(updator: (task: ITask) => UpdateTaskData | null, callback: TaskCallback | null = null) {
+    this.tasks.forEach(async (task) => {
+      const data = updator(task);
+      if (data !== null) {
+        const updated = await this.session.updateTask(this.data.id, task.id, data);
+        if (callback !== null) callback(updated);
+      }
+    });
+    return this.update();
+  }
+
+  async bulkSchedule(scheduler: (task: ITask) => Date | null, callback: TaskCallback | null = null) {
+    this.bulkUpdate((task) => {
+      const date = scheduler(task);
+      return date === null ? null : {'task[due_date]': moment(date).format('YYYY/MM/DD')};
+    }, callback);
+    return this.update();
+  }
+
+  async bulkChangeStatus(updator: (task: ITask) => StatusAction | null, callback: TaskCallback | null = null) {
+    this.tasks.forEach(async (task) => {
+      const data = updator(task);
+      if (data !== null) {
+        const updated = await this.session.changeTaskStatus(this.data.id, task.id, data);
+        if (callback !== null) updated.forEach((t) => callback(t));
+      }
+    });
+    return this.update();
+  }
+
+  // TODO: figure out how to remove tags
   async addTags(task: ITask, tags: string[]): Promise<ITask> {
     console.assert(this.data.id === task.checklist_id);
     if (tags.every((tag) => tag in task.tags)) return task;
@@ -93,7 +238,15 @@ export class Checklist {
 export enum Status {
   open = 0,
   closed = 1,
-  invalided = 2
+  invalidated = 2
+}
+
+export type StatusAction = 'close' | 'invalidate' | 'reopen';
+
+export const statusToAction: Record<Status, StatusAction> = {
+  [Status.open]: 'reopen',
+  [Status.closed]: 'close',
+  [Status.invalidated]: 'invalidate',
 }
 
 
@@ -129,6 +282,11 @@ export function dueDate(task: ITask): Date | null {
   return new Date(
     parts[0], parts[1], parts[2]
   );
+}
+
+
+function sum(nums: number[]) {
+  return nums.reduce((a, b) => a + b, 0);
 }
 
 
@@ -278,7 +436,7 @@ export class Session {
    * @param order Allows overriding the sorting. Possible values: 'id:asc', 'id:desc', or 'updated_at:asc'.
    * @returns A Promise containing an array of task objects in JSON format.
    */
-  public async getChecklistTasks(checklistId: number, withNotes: boolean = false, order: string = 'id:asc'): Promise<ITask[]> {
+  public async getChecklistTasks(checklistId: number, withNotes: boolean = false, order: 'id:asc' | 'id:desc' | 'updated_at:asc' = 'id:asc'): Promise<ITask[]> {
     const url = `${this.apiBaseURL}/checklists/${checklistId}/tasks.json`;
     try {
       const response: AxiosResponse<ITask[]> = await axios.get(url, {
@@ -398,7 +556,7 @@ export class Session {
    * @param action The status change action: 'close', 'invalidate', or 'reopen'.
    * @returns A Promise containing an array of updated task objects in JSON format.
    */
-  public async changeTaskStatus(checklistId: number, taskId: number, action: 'close' | 'invalidate' | 'reopen'): Promise<ITask[]> {
+  public async changeTaskStatus(checklistId: number, taskId: number, action: StatusAction): Promise<ITask[]> {
     try {
       const url = `${this.apiBaseURL}/checklists/${checklistId}/tasks/${taskId}/${action}.json`;
       const response: AxiosResponse<ITask[]> = await axios.post(url, null, {
@@ -460,6 +618,11 @@ export class Session {
       console.error('Error:', error);
       throw new Error('Failed to create task note');
     }
+  }
+
+  public async cancelWithNote(checklistId: number, taskId: number, comment: string) {
+    await this.createTaskNote(checklistId, taskId, comment);
+    await this.changeTaskStatus(checklistId, taskId, "invalidate");
   }
 
   /**

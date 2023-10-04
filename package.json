@@ -25,6 +25,7 @@
     "date.js": "^0.3.3",
     "espn-fantasy-football-api": "^1.1.0",
     "inquirer-search-checkbox": "^1.0.0",
-    "inquirer-table-prompt": "^0.2.1"
+    "inquirer-table-prompt": "^0.2.1",
+    "moment": "^2.29.4"
   }
 }
