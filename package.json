@@ -20,12 +20,26 @@
     "typescript": "^5.1.6"
   },
   "dependencies": {
+    "@bitwarden/sdk-napi": "^0.3.1",
+    "@notionhq/client": "^2.2.13",
     "agent-protocol": "^0.1.2",
+    "airtable": "^0.12.2",
     "axios": "^1.4.0",
+    "better-opn": "^3.0.2",
     "date.js": "^0.3.3",
     "espn-fantasy-football-api": "^1.1.0",
+    "google-auth-library": "^9.2.0",
+    "googleapis": "^128.0.0",
+    "hypothesis-api-client": "^0.1.14",
+    "inquirer": "^8.2.6",
     "inquirer-search-checkbox": "^1.0.0",
     "inquirer-table-prompt": "^0.2.1",
-    "moment": "^2.29.4"
+    "js-yaml": "^4.1.0",
+    "moment": "^2.29.4",
+    "oidc-client": "^1.11.5",
+    "openai": "^4.20.0",
+    "openapi-to-graphql": "^3.0.5",
+    "trakt.tv": "^8.2.0",
+    "voy-search": "^0.6.3"
   }
 }
