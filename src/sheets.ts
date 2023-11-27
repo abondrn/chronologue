@@ -96,13 +96,13 @@ const exchangeCodeForToken = async (googleConfig, code: string, codeVerifier: st
   return response.data;
 };
 
-async function readYamlFile(filePath) {
+export async function readYamlFile(filePath) {
     const fileData = await fs.readFile(filePath, 'utf-8');
     return yaml.load(fileData);
 }
 
 // Function to read JSON data from a file asynchronously
-async function readJsonFile(filePath, defaultData = {}) {
+export async function readJsonFile(filePath, defaultData = {}) {
     try {
       const fileData = await fs.readFile(filePath, 'utf-8');
       return JSON.parse(fileData);
@@ -117,13 +117,13 @@ async function readJsonFile(filePath, defaultData = {}) {
 }
   
   // Function to write JSON data to a file asynchronously
-async function writeJsonFile(filePath, jsonData) {
+export async function writeJsonFile(filePath, jsonData) {
     const jsonString = JSON.stringify(jsonData, null, 2); // 2 spaces for indentation
   
     await fs.writeFile(filePath, jsonString, 'utf-8');
 }
 
-const googleAuthCredentials = async () => {
+export const googleAuthCredentials = async () => {
     const { google: googleConfig } = await readYamlFile('config.yaml');
     const data = await readJsonFile('data.json');
     if (!data.googleToken) {
@@ -147,7 +147,7 @@ const googleAuthCredentials = async () => {
     }
 };
 
-async function selectCells(auth) {
+export async function selectCells(auth) {
     // Create a Sheets API client
     const sheets = google.sheets({ version: 'v4', auth });
         
@@ -225,4 +225,4 @@ async function getSheetList(sheets, spreadsheetId: string) {
 }
 
 // Run the authentication and API request
-showActiveCells();
+//showActiveCells();

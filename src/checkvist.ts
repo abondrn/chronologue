@@ -2,6 +2,7 @@ import axios, { AxiosResponse } from 'axios';
 import moment from 'moment';
 
 
+// TODO: document
 export interface IChecklist {
     id: number;
     name: string;
@@ -29,8 +30,10 @@ type TaskCallback = (task: ITask) => any;
 
 // TODO: create in-memory version for testing
 // TODO: atomic operations
+// TODO: next action check
+// TODO: document
 export class Checklist {
-  private session: Session;
+  session: Session;
   private data: IChecklist;
   tasks: ITask[];
   top: ITask[];
@@ -88,6 +91,34 @@ export class Checklist {
 
   parent(task: ITask): ITask {
     return this.tasksById[task.parent_id];
+  }
+
+  parents(task: ITask): ITask[] {
+    const ps: ITask[] = [];
+    while (task.parent_id != 0) {
+      task = this.parent(task)
+      ps.unshift(task);
+    }
+    return ps;
+  }
+
+  children(task: ITask): ITask[] {
+    return task.tasks.map((t) => this.tasksById[t]);
+  }
+
+  async sortChildrenByDueDate(task: ITask) {
+    const children = this.children(task);
+    children.sort((a, b) => {
+      const ad = this.dueDate(a), bd = this.dueDate(b);
+      return ad && bd ? ad.getTime() - bd.getTime() : 0;
+    });
+    await this.bulkUpdate(
+      (t, i) => (
+        {'task[position]': i+1}
+      ),
+      null,
+      children,
+    );
   }
 
   dueDate(task: ITask) {
@@ -196,9 +227,9 @@ export class Checklist {
     return this.update();
   }
 
-  async bulkUpdate(updator: (task: ITask) => UpdateTaskData | null, callback: TaskCallback | null = null) {
-    this.tasks.forEach(async (task) => {
-      const data = updator(task);
+  async bulkUpdate(updator: (task: ITask, index: number) => UpdateTaskData | null, callback: TaskCallback | null = null, tasks: ITask[] | null = null) {
+    (tasks || this.tasks).forEach(async (task, index) => {
+      const data = updator(task, index);
       if (data !== null) {
         const updated = await this.session.updateTask(this.data.id, task.id, data);
         if (callback !== null) callback(updated);
@@ -250,6 +281,7 @@ export const statusToAction: Record<Status, StatusAction> = {
 }
 
 
+// TODO: document
 export interface ITask {
     id: number;
     parent_id: number;
@@ -353,6 +385,8 @@ export interface INote {
 }
 
 
+// TODO: rate limit
+// TODO: wrap requests for errors
 export class Session {
     private token: string | null;
     private apiBaseURL: string;
@@ -485,16 +519,16 @@ export class Session {
     checklist_id: number,
     content: string,
     parent_id?: number,
-    tags?: string,
-    due_date?: string | null,
+    tags?: string[],
+    due_date?: Date,
     position?: number,
     status?: Status,
   }): Promise<ITask> {
     return await this._createTask(opts.checklist_id, {
       'task[content]': opts.content,
       'task[parent_id]': opts.parent_id,
-      'task[tags]': opts.tags,
-      'task[due_date]': opts.due_date,
+      'task[tags]': opts.tags?.join(','),
+      'task[due_date]': opts.due_date ? moment(opts.due_date).format('YYYY/MM/DD') : undefined,
       'task[position]': opts.position,
       'task[status]': opts.status,
     });
@@ -696,8 +730,8 @@ export class Session {
         checklist_id: checklistId,
         content: taskToCopy.content,
         parent_id: parent ? parent.id : taskToCopy.parent_id,
-        tags: taskToCopy.tags_as_text,
-        due_date: this.updateDueDate(taskToCopy.due),
+        tags: Object.keys(taskToCopy.tags),
+        due_date: this.updateDueDate(taskToCopy),
         position: parent ? parent.tasks.length + 1 : taskToCopy.position + 1,
         status: 0, // even if the copied task is not open, the copied task must be
       });
@@ -718,16 +752,17 @@ export class Session {
 
   /**
    * Helper method to update the due date to today if it is in the past.
-   * @param dueDate The due date to be updated.
+   * @param task The task with a due date to be updated.
    * @returns The updated due date string.
    */
-  private updateDueDate(dueDate: string | null): string | null {
-    if (!dueDate) {
-      return null;
+  private updateDueDate(task: ITask): Date | undefined {
+    const due = dueDate(task);
+    if (!due) {
+      return undefined;
     }
 
-    const today = new Date().toISOString().split('T')[0];
-    return dueDate < today ? today : dueDate;
+    const today = new Date();
+    return due < today ? today : due;
   }
 
 
