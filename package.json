@@ -21,7 +21,9 @@
   },
   "dependencies": {
     "@bitwarden/sdk-napi": "^0.3.1",
+    "@inquirer/prompts": "^4.1.0",
     "@notionhq/client": "^2.2.13",
+    "@xmldom/xmldom": "^0.8.10",
     "agent-protocol": "^0.1.2",
     "airtable": "^0.12.2",
     "axios": "^1.4.0",
@@ -31,7 +33,6 @@
     "google-auth-library": "^9.2.0",
     "googleapis": "^128.0.0",
     "hypothesis-api-client": "^0.1.14",
-    "inquirer": "^8.2.6",
     "inquirer-search-checkbox": "^1.0.0",
     "inquirer-table-prompt": "^0.2.1",
     "js-yaml": "^4.1.0",
