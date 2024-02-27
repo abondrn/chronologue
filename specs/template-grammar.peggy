@@ -11,38 +11,41 @@ Template = Chunk*
 
 Chunk = "$" val:PathNoWs { return val; }
   / "{{" _ val:Expr _ "}}" { return { type: 'expr', val }; }
-  / [^${}] 
+  / [^${}]
 
-Expr = left:Value _ op:Op _ right:Expr { return { left, right, op }; }
-      / data:Value filters:(_ "|" _ Call)+ { return {data, filters: filters.map((c) => c[3])}; }
-      / Value
- 
+Expr = first:Value rest:Action* { return { first, rest }; }
+Action = _ "|" _ right:(Lookups / Call) { return { type: 'filter', right } }
+       / _ op:Op _ right:Expr          { return { type: 'op', right, op }; }
+
  Op = "||" / "&&"
  
  
  Value "value"
  = val:String  { return {type: 'str', content: val}; }
  / val:Integer { return {type: 'int', content: val}; }
- / val:Path
  / val:Call
- / val:Id      { return {type: 'id',  content: val}; }
+ / val:Path
  
 PathNoWs
-  = val:Id keys:(Lookup)* { return {type: 'lookup', val, keys: keys.map((k) => k[1])} }
+  = val:Id keys:(Lookup)* { return {type: 'lookup', val, keys } }
 
 LookupNoWs
   = "." key:Id       { return key; }
-  / "[" key:Expr "]" { return key; }
+  / "[" _ key:Expr _ "]" { return key; }
 
 Path "path"
-  = val:Id keys:(_ Lookup)+ { return {type: 'lookup', val, keys: keys.map((k) => k[1])} }
-  
+  = val:Id keys:Lookups { return {type: 'lookup', val, keys } }
+  / val:Id { return {type: 'id',  content: val}; }
+
+Lookups
+ = keys:(_ Lookup)+ { return keys.map((k) => k[1]); }
+
 Lookup
   = "." _ key:Id         { return key; }
   / "[" _ key:Expr _ "]" { return key; }
 
 Call "call"
-  = name:Id __ args:FilterArgs { return {type: 'call', name, args}; }
+  = name:Path __ args:FilterArgs { return {type: 'call', name, args}; }
 FilterArgs "arguments"
   = named:FilterKwargs { return { positional: [], named }; }
   /  first:Value rest:(_ "," _ FilterArgs)? {

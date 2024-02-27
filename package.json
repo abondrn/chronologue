@@ -7,7 +7,7 @@
     "test": "jest",
     "download-specs": "curl https://raw.githubusercontent.com/AI-Engineer-Foundation/agent-protocol/main/schemas/openapi.yml -o specs/agent-protocol.yaml",
     "generate-clients": "openapi -i specs/agent-protocol.yaml -o src/agent_protocol -c axios --indent 2",
-    "generate-parser": "peggy -o src/template-parser.js --format es specs/template-grammar.peggy"
+    "generate-parser": "peggy -o src/template-parser.js --format commonjs specs/template-grammar.peggy"
   },
   "keywords": [],
   "author": "",
